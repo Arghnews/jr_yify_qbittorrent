@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
 
-#VERSION: 0.1
+#VERSION: 0.01
 #AUTHORS: Justin Riddell
 
+import itertools
 import re
 import requests
 import sys
 
 import bs4
 
+from multiprocessing import cpu_count
 from multiprocessing.dummy import Pool
 from novaprinter import prettyPrinter
 
@@ -30,14 +32,8 @@ year => Year released
 
 yify_root = "http://www.yify-movies.net"
 
-def movie_urls(title, root = yify_root):
-    url = root + "/search/" + title + "/"
-    content = str(requests.get(url).content)
-    # Urls are on page twice each
-    return list({"".join([root, m])
-            for m in re.findall(r"href=\"(/movies[^\"]*)\"", content)})
-
 def metadata_from_url(url, root = yify_root):
+    # print("Getting")
     metadata = {
             "engine_url": root,
             "desc_link": url,
@@ -63,7 +59,7 @@ def metadata_from_page(page):
     year_end = name.rfind(")", year_start)
     metadata["year"] = name[year_start: year_end]
 
-    metadata["link"] = soup.find("a", href = re.compile("^magnet:.*"))["href"]
+    metadata["link"] = soup.find("a", href = re.compile(r"^magnet:.*"))["href"]
 
     for tag in soup.find("div", class_ = "available").ul.find_all("li"):
         # Remove bold tag from first element
@@ -77,17 +73,54 @@ def metadata_from_page(page):
             metadata["seeds"] = seeds
     return metadata
 
+def movie_urls_on_page(page):
+    return {m for m in re.findall(r"href=\"(/movies[^\"]*)\"", page)}
+
 class jr_yify:
     url = yify_root
-    name = "yify-movies.net"
+    name = "justin-yify-movies.net"
     supported_categories = {"all": "0", "movies": "6",}
 
     def __init__(self):
-        self._pool = Pool(processes = 10)
+        self._pool = Pool(processes = max(6, cpu_count() * 0))
 
     def search(self, what, cat = "movies"):
-        urls = movie_urls(what)
+        self.movie_urls(what)
+
+    def other_pages_from_first(self, soup, root = yify_root):
+        res = ["".join([root, link["href"]]) for link in
+                soup.find("div", class_ = "pagination").find_all("a")[1:-1]]
+        # print(res)
+        # sys.exit(0)
+        return res
+
+    def movie_urls(self, title, root = yify_root):
+        url = root + "/search/" + title + "/"
+        page = str(requests.get(url).content)
+        soup = bs4.BeautifulSoup(page, features = "html.parser")
+
+        # TODO:
+        # this can be parallelised better by removing the dependency stages
+        # for each part so that any part can flow as fast as possible to the end
+
+        # pages = itertools.chain(page, (str(next_page.content)
+        #     for next_page in self._pool.map(
+        #         requests.get, self.other_pages_from_first(soup))))
+        def f(*args):
+            # print("Started")
+            return requests.get(*args)
+
+        # print(url)
+        pages = [page] + [str(next_page.content)
+            for next_page in self._pool.imap_unordered(
+                f, self.other_pages_from_first(soup))]
+        # print(pages)
+
+        urls = [root + url for p in pages for url in movie_urls_on_page(p)]
         # print(urls)
+        # print(len(urls))
+        # for u in sorted(urls):
+        #     print(u)
 
         # http://www.yify-movies.net/movies/solo-a-star-wars-story-2018-yify-720p.html
         # Remove 720p version if 1080p version exists
@@ -96,15 +129,18 @@ class jr_yify:
                     and url.replace("720p.html", "1080p.html") in urls)
                 or url.endswith("3d.html")]
         urls = [url for url in urls if url not in remove]
+
         movies = sorted([movie for movie in
                 self._pool.imap_unordered(metadata_from_url, urls)],
                 key = lambda movie: (int(movie["year"]), movie["name"]))
         for movie in movies:
+            pass
             prettyPrinter(movie)
 
 def main(argv):
     searcher = jr_yify()
-    searcher.search("star wars")
+    searcher.search("scott pilgrim")
 
 if __name__ == "__main__":
     sys.exit(main(sys.argv))
+
