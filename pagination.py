@@ -1,14 +1,12 @@
 #!/usr/bin/env python3.7
 
+import asyncio
 import bs4
 import functools
-import operator
 import re
-import requests
 import sys
 
 import aiohttp
-import asyncio
 
 import novaprinter
 
@@ -95,79 +93,55 @@ def metadata_from_page(page):
             metadata["seeds"] = seeds
     return metadata
 
-async def main_async():
+async def main_async(session, title, root):
 
+    # Get first set of pages
+    root_search_title = root + "/search/" + title + "/"
+    pages = [await get(session, root_search_title)]
+    urls = [root_search_title + url for url in additional_urls(pages[0])]
+    if urls:
+        pages += await asyncio.gather(*[get(session, url) for url in urls])
+    movie_urls = [url for page in pages for url in page_movie_urls(page)]
+    # print(len(pages))
+    # print(len(movie_urls))
+
+    # Remove bad quality or 3d versions
+    remove = [url for url in movie_urls if
+            (url.endswith("720p.html")
+                and url.replace("720p.html", "1080p.html") in movie_urls)
+            or url.endswith("3d.html")]
+    movie_urls = [root + url for url in movie_urls if url not in remove]
+    # print(len(movie_urls))
+
+    # Get actual metadata including magnet links
+    # print(movie_urls)
+    magnets = await asyncio.gather(
+            *[metadata_from_url(session, url, root) for url in movie_urls])
+    movies = sorted(magnets,
+            key = lambda movie: (int(movie["year"]), movie["name"]))
+
+    for movie in movies:
+        # print(movie["name"], "-", movie["year"])
+        novaprinter.prettyPrinter(movie)
+
+async def main_a(title, root):
+    async with aiohttp.ClientSession(
+            connector = aiohttp.TCPConnector(limit = 500)) as session:
+        await main_async(session, title, root)
+
+def search_me(title, root):
+    asyncio.get_event_loop().run_until_complete(main_a(title, root))
+
+def main(argv):
     root = "http://www.yify-movies.net"
     # title = "asdfasdf" # No results
     # title = "mission impossible" # 1 page of results (current page)
     title = "batman" # 3 pages of results
     # title = "the" # Many many pages of results ~5000 movie magnets, long time
-
-    conn = aiohttp.TCPConnector(limit = 500)
-    async with aiohttp.ClientSession(connector = conn) as session:
-
-        # Get first set of pages
-        root_search_title = root + "/search/" + title + "/"
-        pages = [await get(session, root_search_title)]
-        urls = [root_search_title + url for url in additional_urls(pages[0])]
-        if urls:
-            pages += await asyncio.gather(*[get(session, url) for url in urls])
-        movie_urls = [url for page in pages for url in page_movie_urls(page)]
-        # print(len(pages))
-        # print(len(movie_urls))
-
-        # Remove bad quality or 3d versions
-        remove = [url for url in movie_urls if
-                (url.endswith("720p.html")
-                    and url.replace("720p.html", "1080p.html") in movie_urls)
-                or url.endswith("3d.html")]
-        movie_urls = [root + url for url in movie_urls if url not in remove]
-        # print(len(movie_urls))
-
-        # Get actual metadata including magnet links
-        # print(movie_urls)
-        magnets = await asyncio.gather(
-                *[metadata_from_url(session, url, root) for url in movie_urls])
-        movies = sorted(magnets,
-                key = lambda movie: (int(movie["year"]), movie["name"]))
-
-        for movie in movies:
-            # print(movie["name"], "-", movie["year"])
-            novaprinter.prettyPrinter(movie)
-
-def main(argv):
-    asyncio.run(main_async())
-
-    # one = "http://www.yify-movies.net/search/mission impossible/"
-    # few = "http://www.yify-movies.net/search/batman/"
-    # many = "http://www.yify-movies.net/search/the/"
-
-    # one_c = str(requests.get(one).content)
-    # few_c = str(requests.get(few).content)
-    # many_c = str(requests.get(many).content)
-
-    # soup = bs4.BeautifulSoup(one_c, features = "html.parser")
-    # print(soup.find_all("div", class_ = "pagination"))
-    # for i in soup.find("div", class_ = "pagination").find_all("a"):
-    #     print(i["href"])
-
-    # soup = bs4.BeautifulSoup(few_c, features = "html.parser")
-    # print(highest_page(soup))
-    # for page in pages(soup):
-    #     print(page)
-
-    # soup = bs4.BeautifulSoup(many_c, features = "html.parser")
-
-    # print(re.findall("[1-9]+", "www/the movie ")[-1])
-
-    # soup = bs4.BeautifulSoup(many_c, features = "html.parser")
-    # for i in soup.find("div", class_ = "pagination").find_all("a")[1:]:
-    #     print(i["href"])
-
-    # res = ["".join([root, link["href"]]) for link in
-    #         soup.find("div", class_ = "pagination").find_all("a")[1:-1]]
-
-    # print("Hello world!")
+    search_me(title, root)
+    # with aiohttp.ClientSession(
+    #         connector = aiohttp.TCPConnector(limit = 500)) as session:
+    #     asyncio.run(main_async(session, root, title))
 
 if __name__ == "__main__":
     sys.exit(main(sys.argv))
