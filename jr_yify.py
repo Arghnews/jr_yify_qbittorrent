@@ -25,6 +25,13 @@ import asyncio
 # message given wasn't a generic "failed to load plugin".
 # Simple solution, dump all this into one file.
 
+# The way this works:
+# 1. Download search page result ie. yify/search/batman
+# 2. Parse and download any additional results pages for batman movies
+# 3. For each results page, scrape the set of urls for actual movie pages
+# 4. Download all actual movie pages and scrape metadata including magnet link
+# 5. Print these magnet links
+
 import asyncio
 import bs4
 import functools
@@ -45,6 +52,7 @@ import novaprinter
 # http://www.yify-movies.net/search/the/
 
 def additional_urls(page):
+    """Returns list of additional results pages from the first results page"""
     soup = bs4.BeautifulSoup(page, features = "html.parser")
     pages_div = soup.find("div", class_ = "pagination")
 
@@ -52,7 +60,7 @@ def additional_urls(page):
     if not pages_div:
         return []
 
-    # If pagination div is empty then we still need to yield this page
+    # If pagination div is empty then there are no additional results pages
     hrefs = pages_div.find_all("a")
     if not hrefs:
         return []
@@ -63,6 +71,7 @@ def additional_urls(page):
     return ["/".join(["time", str(i), ""]) for i in range(2, last + 1)]
 
 async def get(session, url):
+    """Given a session and url (awaits and) fetches the url content"""
     async with session.get(url) as resp:
         return await resp.text()
 
@@ -70,6 +79,7 @@ def page_movie_urls(page):
     return {m for m in re.findall(r"href=\"(/movies[^\"]*)\"", page)}
 
 async def metadata_from_url(session, url, root):
+    """Downloads a movie page from url, returning a dict of metadata"""
     # print("Getting")
     metadata = {
             "engine_url": root,
@@ -91,6 +101,7 @@ async def metadata_from_url(session, url, root):
 #     doneso.i += 1
 
 def metadata_from_page(page):
+    """Parses page to grab appropriate metadata including magnet link"""
     metadata = {"leech": "-1",}
     soup = bs4.BeautifulSoup(page, features = "html.parser")
 
@@ -146,16 +157,19 @@ async def main_async(session, title, root):
     movies = sorted(magnets,
             key = lambda movie: (int(movie["year"]), movie["name"]))
 
+    # Print results
     for movie in movies:
         # print(movie["name"], "-", movie["year"])
         novaprinter.prettyPrinter(movie)
 
 async def main_a(title, root):
+    """Asynchronous entry point"""
     async with aiohttp.ClientSession(
             connector = aiohttp.TCPConnector(limit = 500)) as session:
         await main_async(session, title, root)
 
 def search_me(title, root):
+    """Synchronous entry point, root being yify url root"""
     asyncio.get_event_loop().run_until_complete(main_a(title, root))
 
 ### End of pagination.py
@@ -178,8 +192,6 @@ quality => Quality eg. 1080p, 3d
 year => Year released
 """
 
-yify_root = "http://www.yify-movies.net"
-
 # Issues with regard to:
 # https://aiohttp.readthedocs.io/en/stable/faq.html#why-is-creating-a-clientsession-outside-of-an-event-loop-dangerous
 # Event loop should always live at least as long as the async objects scheduled
@@ -188,7 +200,7 @@ yify_root = "http://www.yify-movies.net"
 # qbittorrent used asyncio stuff underneath (and messed with event loops)
 
 class jr_yify:
-    url = yify_root
+    url = "http://www.yify-movies.net"
     name = "yify-movies.net"
     supported_categories = {"all": "0", "movies": "6",}
 
